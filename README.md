@@ -1,42 +1,48 @@
 # dsh-current-title-hydration
 
-A removable DSH Desktop compatibility plugin that keeps the **currently selected** session title from falling back to the workspace basename after a hard refresh.
+一个可随时卸载的 DSH Desktop 兼容性插件：在硬刷新后，避免**当前选中的会话**标题退回为工作区目录名。
 
-## Problem
+## 问题背景
 
-For a cold session, DSH's `session.list` intentionally reads title projections from a zero-I/O cache. When the cache omits a valid `title` projection, the client falls back to:
+对于冷启动会话，DSH 的 `session.list` 会有意从零 I/O 缓存读取标题投影。当缓存缺少有效的 `title` 投影时，客户端会按以下顺序回退：
 
 ```text
-session title → cwd basename → session ID
+会话标题 → cwd 目录名 → 会话 ID
 ```
 
-For a session in a directory named `DSH`, that fallback appears as `DSH`, even though the durable `session/title` event still contains the real title.
+因此，位于名为 `DSH` 的目录中的会话，即使持久化的 `session/title` 事件仍保存真实标题，也可能显示为 `DSH`。
 
-## Behavior
+## 插件行为
 
-This plugin:
+本插件会：
 
-1. watches the client session list;
-2. does nothing when the selected session already has a title projection;
-3. when it does not, requests only that selected session's last durable `session/title` event through a local, loopback-only read endpoint;
-4. applies the title to the existing projection store, using DSH's normal sequence ordering;
-5. stores a small browser-local cache as a fast path for the next refresh.
+1. 监听客户端会话列表；
+2. 如果当前选中的会话已有标题投影，则不执行任何操作；
+3. 若标题投影缺失，仅经由本机 loopback 读取端点查询该会话最后一个持久化的 `session/title` 事件；
+4. 使用 DSH 正常的序列顺序，将标题写入现有 projection store；
+5. 写入一个很小的浏览器本地缓存，加速下一次刷新。
 
-It does **not** modify DSH core bundles, session logs, projection-cache files, recall snapshots, or workspace data. It does not hydrate every sidebar row.
+本插件**不会**修改 DSH 核心 bundle、会话日志、projection-cache 文件、recall 快照或工作区数据，也不会为侧边栏的所有会话批量补全标题。
 
-## Installation
+## 使用 AI 安装（先读 AGENTS.md）
 
-From the plugin directory:
+如果由 AI 助手、编码代理或自动化工具安装/修改本插件，**必须先阅读仓库根目录的 [AGENTS.md](AGENTS.md)**。该文件明确说明本插件没有发布到 npm，安装时必须创建本地 `link:`，并列出重启、卸载与修改边界。
+
+## 安装（本地链接）
+
+本插件没有发布到 npm，必须从本地仓库创建链接。请在本仓库根目录执行：
 
 ```bash
 APP="/Applications/DSH Desktop.app/Contents/Resources/app"
 export DSH_HOME="$HOME/Library/Application Support/dsh-desktop/harness"
 "$APP/node_modules/node/bin/node" \
   "$APP/node_modules/@deepseek-ai/dsh/lib/bin.js" \
-  plugin --profile web add "$PWD"
+  plugin --profile web add "link:$PWD"
 ```
 
-Restart DSH Desktop after installation. The plugin can be removed with:
+完成后请完全退出并重新打开 DSH Desktop。请勿仅安装到 `node_modules`，也不要将上述命令替换为直接执行 `pnpm add`；`dsh plugin` 成功后会把插件同步进 DSH profile 的 bundle 配置。
+
+## 卸载
 
 ```bash
 APP="/Applications/DSH Desktop.app/Contents/Resources/app"
@@ -46,16 +52,18 @@ export DSH_HOME="$HOME/Library/Application Support/dsh-desktop/harness"
   plugin --profile web remove dsh-current-title-hydration
 ```
 
-## Verification
+卸载后同样需要完全重启 DSH Desktop。
 
-1. Open a titled session and wait for the sidebar/header to display the expected title.
-2. Hard-refresh the DSH Desktop web view.
-3. The selected session should retain or quickly restore its durable title instead of displaying the cwd basename.
+## 验证
 
-Run static and unit checks with:
+1. 打开一个已有标题的会话，等待侧边栏或 Header 显示预期标题。
+2. 对 DSH Desktop web view 执行硬刷新。
+3. 当前选中的会话应保留或很快恢复持久化标题，而不是显示 cwd 目录名。
+
+可执行以下命令进行静态检查和单元测试：
 
 ```bash
 npm run check
 ```
 
-(Use the Node runtime packaged with DSH Desktop if a standalone Node/npm installation is unavailable.)
+如果系统未单独安装 Node/npm，请使用 DSH Desktop 内置的 Node 运行时。
