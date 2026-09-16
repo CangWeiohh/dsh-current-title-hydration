@@ -57,6 +57,29 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /**
+       * The client projection store keeps one `title` row under the higher-seq-
+       * wins rule (`seq <= row.seq` drops the write). The durable event seq read
+       * from the stored log can sit BELOW the row the server already seeded
+       * (seeded/migrated sessions carry a much larger logical seq space, and the
+       * cold list may deliver `title: null` at that higher watermark), so the
+       * repair must write at least one past the current row watermark — otherwise
+       * the empty row outranks the restored title forever.
+       */
+      function repairSeq(existingRow, durableSeq) {
+        const current = existingRow && Number.isInteger(existingRow.seq) ? existingRow.seq : -1
+        return Math.max(current + 1, Number.isInteger(durableSeq) ? durableSeq : 0)
+      }
+
+      function rowSeqOf(store) {
+        try {
+          const row = store?.rows?.get?.('title')
+          return row && Number.isInteger(row.seq) ? row : undefined
+        } catch {
+          return undefined
+        }
+      }
+
       const hydrate = async () => {
         if (!installation.active) return
         let sessionId
@@ -72,7 +95,7 @@ window.__ModuleLoader__.load({
             return
           }
           const cached = readCached(sessionId)
-          if (cached) store.apply('title', cached.title, cached.seq)
+          if (cached) store.apply('title', cached.title, repairSeq(rowSeqOf(store), cached.seq))
         } catch {
           return
         }
@@ -82,8 +105,8 @@ window.__ModuleLoader__.load({
         try {
           const durable = await readDurableTitle(sessionId)
           if (!installation.active || !durable) return
-          store.apply('title', durable.title, durable.seq)
-          writeCached(sessionId, durable.title, durable.seq)
+          store.apply('title', durable.title, repairSeq(rowSeqOf(store), durable.seq))
+          writeCached(sessionId, durable.title, repairSeq(undefined, durable.seq))
         } catch {
           // A transient read error leaves the stock cwd fallback intact and retries next refresh.
         } finally {
