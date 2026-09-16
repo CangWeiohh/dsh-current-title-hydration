@@ -40,7 +40,7 @@ window.__ModuleLoader__.load({
       if (!manager || manager.__dshCurrentTitleHydration) return
       if (typeof manager.refreshList !== 'function' || typeof manager.getListSnapshot !== 'function' || typeof manager.projectionStore !== 'function') return
 
-      const installation = { active: true, pending: new Set() }
+      const installation = { active: true, pending: new Set(), seenSeq: new Map() }
       manager.__dshCurrentTitleHydration = installation
 
       const remember = () => {
@@ -99,6 +99,14 @@ window.__ModuleLoader__.load({
           if (!authoritative && VALID_TITLE(store.get('title'))) return
           const durable = await readDurableTitle(sessionId)
           if (!installation.active || !durable) return
+          // The rename event's append is best-effort: a read started before the
+          // server flushes can still return the PREVIOUS durable title. A user
+          // rename briefly updates the row (DSH's own settlement), so an older
+          // stale read must NEVER overwrite it — only ever advance the title
+          // past the highest durable seq this client has already observed.
+          const seen = installation.seenSeq.get(sessionId)
+          if (Number.isInteger(seen) && Number.isInteger(durable.seq) && durable.seq < seen) return
+          if (Number.isInteger(durable.seq) && durable.seq > (seen ?? -1)) installation.seenSeq.set(sessionId, durable.seq)
           const row = rowSeqOf(store)
           if (store.get('title') === durable.title) return // already displayed; keep the watermark stable
           store.apply('title', durable.title, repairSeq(row, durable.seq))
