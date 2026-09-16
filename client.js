@@ -134,9 +134,10 @@ window.__ModuleLoader__.load({
         let index = 0
         const next = () => {
           while (installation.active && running < CONCURRENCY && index < targets.length) {
-            const sessionId = targets[index += 1]
+            const sessionId = targets[index]
+            index += 1
             const store = manager.projectionStore(sessionId)
-            if (!authoritative && sessionId !== current && VALID_TITLE(store.get('title'))) continue
+            if (sessionId !== current && VALID_TITLE(store.get('title'))) continue
             running += 1
             hydrateOne(sessionId, store, sessionId === current).finally(() => {
               running -= 1
