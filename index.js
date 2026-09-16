@@ -16,6 +16,34 @@ export function lastTitleFromEvents(events) {
   return null
 }
 
+/**
+ * Read the whole durable event log for one stored session through whichever
+ * read API the installed DSH exposes:
+ * - DSH 0.1.5+ replaces `readFrom` with `open(id, 'read')` returning a handle
+ *   whose `read(offset)` yields `{ events }`; the handle must be closed.
+ * - Older DSH builds expose `readFrom(id, offset)` yielding `{ events }`.
+ */
+export async function readLogEvents(persistence, id) {
+  if (typeof persistence?.open === 'function') {
+    const handle = await persistence.open(id, 'read')
+    try {
+      const slice = await handle.read(0)
+      return Array.isArray(slice?.events) ? slice.events : []
+    } finally {
+      try {
+        await handle.close()
+      } catch {
+        // Closing a read handle is best-effort; the events are already read.
+      }
+    }
+  }
+  if (typeof persistence?.readFrom === 'function') {
+    const inspected = await persistence.readFrom(id, 0)
+    return Array.isArray(inspected?.events) ? inspected.events : []
+  }
+  throw new Error('this DSH build exposes no supported session persistence read API')
+}
+
 function trusted(req) {
   const address = req.socket?.remoteAddress
   return (address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1')
@@ -49,8 +77,8 @@ function register(ctx, webServer, owner) {
         return
       }
       try {
-        const inspected = await ctx.sessionPersistence.readFrom(id, 0)
-        const title = lastTitleFromEvents(inspected.events)
+        const events = await readLogEvents(ctx.sessionPersistence, id)
+        const title = lastTitleFromEvents(events)
         send(res, 200, { ok: true, title })
       } catch (error) {
         send(res, 404, { ok: false, error: 'session not found' })
