@@ -83,18 +83,25 @@ window.__ModuleLoader__.load({
       /** Bound concurrent durable reads so a large sidebar hydrates politely. */
       const CONCURRENCY = 4
 
-      async function hydrateOne(sessionId, store) {
+      /**
+       * Apply the durable title to one session's title row.
+       * `authoritative` (the selected session) compares the durable title
+       * against the displayed row on EVERY refresh, so a manual rename — which
+       * DSH accepts server-side but whose own client write is dropped under the
+       * higher-seq-wins rule once this plugin raised the row watermark — is
+       * picked up from the durable log on the next list refresh. Non-selected
+       * sessions are only hydrated when their row is missing or null.
+       */
+      async function hydrateOne(sessionId, store, authoritative) {
         if (!installation.active || installation.pending.has(sessionId)) return
         installation.pending.add(sessionId)
         try {
-          const liveTitle = store.get('title')
-          if (VALID_TITLE(liveTitle)) return
-          const cached = readCached(sessionId)
-          if (cached) store.apply('title', cached.title, repairSeq(rowSeqOf(store), cached.seq))
-          if (VALID_TITLE(store.get('title'))) return
+          if (!authoritative && VALID_TITLE(store.get('title'))) return
           const durable = await readDurableTitle(sessionId)
           if (!installation.active || !durable) return
-          store.apply('title', durable.title, repairSeq(rowSeqOf(store), durable.seq))
+          const row = rowSeqOf(store)
+          if (store.get('title') === durable.title) return // already displayed; keep the watermark stable
+          store.apply('title', durable.title, repairSeq(row, durable.seq))
           writeCached(sessionId, durable.title, repairSeq(undefined, durable.seq))
         } catch {
           // A transient read error leaves the stock cwd fallback intact and retries next refresh.
@@ -107,13 +114,16 @@ window.__ModuleLoader__.load({
        * Hydrate every listed session whose title row is missing or null, not
        * just the selection: cold rows fall back to the cwd basename whenever
        * the durable title exists but the list cache omitted it, and users see
-       * the whole sidebar, not one header.
+       * the whole sidebar, not one header. The selected session is always
+       * reconciled against the durable title so renames surface immediately.
        */
       const hydrateList = () => {
         if (!installation.active) return
         let targets
+        let current
         try {
           const snapshot = manager.getListSnapshot()
+          current = snapshot?.current
           targets = (snapshot?.items ?? [])
             .map((item) => item?.sessionId)
             .filter((id) => typeof id === 'string' && id !== '')
@@ -126,9 +136,9 @@ window.__ModuleLoader__.load({
           while (installation.active && running < CONCURRENCY && index < targets.length) {
             const sessionId = targets[index += 1]
             const store = manager.projectionStore(sessionId)
-            if (VALID_TITLE(store.get('title'))) continue
+            if (!authoritative && sessionId !== current && VALID_TITLE(store.get('title'))) continue
             running += 1
-            hydrateOne(sessionId, store).finally(() => {
+            hydrateOne(sessionId, store, sessionId === current).finally(() => {
               running -= 1
               next()
             })
