@@ -80,29 +80,18 @@ window.__ModuleLoader__.load({
         }
       }
 
-      const hydrate = async () => {
-        if (!installation.active) return
-        let sessionId
-        let store
-        try {
-          const snapshot = manager.getListSnapshot()
-          sessionId = snapshot.current
-          if (!sessionId) return
-          store = manager.projectionStore(sessionId)
-          const liveTitle = store.get('title')
-          if (VALID_TITLE(liveTitle)) {
-            remember()
-            return
-          }
-          const cached = readCached(sessionId)
-          if (cached) store.apply('title', cached.title, repairSeq(rowSeqOf(store), cached.seq))
-        } catch {
-          return
-        }
+      /** Bound concurrent durable reads so a large sidebar hydrates politely. */
+      const CONCURRENCY = 4
 
-        if (installation.pending.has(sessionId)) return
+      async function hydrateOne(sessionId, store) {
+        if (!installation.active || installation.pending.has(sessionId)) return
         installation.pending.add(sessionId)
         try {
+          const liveTitle = store.get('title')
+          if (VALID_TITLE(liveTitle)) return
+          const cached = readCached(sessionId)
+          if (cached) store.apply('title', cached.title, repairSeq(rowSeqOf(store), cached.seq))
+          if (VALID_TITLE(store.get('title'))) return
           const durable = await readDurableTitle(sessionId)
           if (!installation.active || !durable) return
           store.apply('title', durable.title, repairSeq(rowSeqOf(store), durable.seq))
@@ -114,12 +103,46 @@ window.__ModuleLoader__.load({
         }
       }
 
+      /**
+       * Hydrate every listed session whose title row is missing or null, not
+       * just the selection: cold rows fall back to the cwd basename whenever
+       * the durable title exists but the list cache omitted it, and users see
+       * the whole sidebar, not one header.
+       */
+      const hydrateList = () => {
+        if (!installation.active) return
+        let targets
+        try {
+          const snapshot = manager.getListSnapshot()
+          targets = (snapshot?.items ?? [])
+            .map((item) => item?.sessionId)
+            .filter((id) => typeof id === 'string' && id !== '')
+        } catch {
+          return
+        }
+        let running = 0
+        let index = 0
+        const next = () => {
+          while (installation.active && running < CONCURRENCY && index < targets.length) {
+            const sessionId = targets[index += 1]
+            const store = manager.projectionStore(sessionId)
+            if (VALID_TITLE(store.get('title'))) continue
+            running += 1
+            hydrateOne(sessionId, store).finally(() => {
+              running -= 1
+              next()
+            })
+          }
+        }
+        next()
+      }
+
       const onListChanged = () => {
         remember()
-        queueMicrotask(hydrate)
+        queueMicrotask(hydrateList)
       }
       const unsubscribe = typeof manager.subscribe === 'function' ? manager.subscribe(onListChanged) : () => {}
-      queueMicrotask(hydrate)
+      queueMicrotask(hydrateList)
 
       // Cordis disposal removes only this listener; no core runtime method or DSH log is changed.
       return () => {
