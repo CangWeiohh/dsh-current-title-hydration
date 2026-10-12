@@ -2,6 +2,8 @@ window.__ModuleLoader__.load({
   id: 'dsh-current-title-hydration',
   factory: () => {
     const STORAGE_PREFIX = 'dsh.current-title-hydration.v1:'
+    /** Persisted client selection store owned by the workspace UI service. */
+    const SELECTION_KEY = 'dsh.sessions.current'
     const ROUTE = '/__dsh/current-title-hydration/title'
     const VALID_TITLE = (value) => typeof value === 'string' && value.trim() !== ''
 
@@ -35,7 +37,39 @@ window.__ModuleLoader__.load({
         : null
     }
 
-    function install(sessions) {
+    /**
+     * Resolve the id of the Session shown in the main view (the "selected" one).
+     *
+     * DSH 0.1.x published it as `current` on the Session list snapshot. The
+     * 0.2.0 client keeps view selection OUTSIDE the Session Manager: the
+     * workspace UI service owns the selection store, and that store persists
+     * itself as whole JSON under `dsh.sessions.current`. Read every source that
+     * exists, newest first, and fall back to "no selection" — never guess,
+     * because a wrong id would make this plugin treat an arbitrary Session as
+     * authoritative.
+     */
+    function selectedSessionId(ctx, snapshot) {
+      if (typeof snapshot?.current === 'string' && snapshot.current !== '') return snapshot.current
+      try {
+        const workspace = ctx?.get?.('uiWorkspace')
+        const selection = workspace?.selection?.getSnapshot?.()
+        if (typeof selection?.sessionId === 'string' && selection.sessionId !== '') return selection.sessionId
+        const main = workspace?.mainReference?.sessionId
+        if (typeof main === 'string' && main !== '') return main
+      } catch {
+        // The workspace service is optional: another client build may not expose it.
+      }
+      try {
+        const raw = localStorage.getItem(SELECTION_KEY)
+        const parsed = raw === null ? null : JSON.parse(raw)
+        if (typeof parsed?.sessionId === 'string' && parsed.sessionId !== '') return parsed.sessionId
+      } catch {
+        // Unreadable or absent persisted selection: fall through to no selection.
+      }
+      return undefined
+    }
+
+    function install(ctx, sessions) {
       const manager = sessions?.manager
       if (!manager || manager.__dshCurrentTitleHydration) return
       if (typeof manager.refreshList !== 'function' || typeof manager.getListSnapshot !== 'function' || typeof manager.projectionStore !== 'function') return
@@ -47,7 +81,7 @@ window.__ModuleLoader__.load({
         if (!installation.active) return
         try {
           const snapshot = manager.getListSnapshot()
-          const id = snapshot.current
+          const id = selectedSessionId(ctx, snapshot)
           if (!id) return
           const store = manager.projectionStores?.get?.(id)
           const row = store?.rows?.get?.('title')
@@ -131,7 +165,7 @@ window.__ModuleLoader__.load({
         let current
         try {
           const snapshot = manager.getListSnapshot()
-          current = snapshot?.current
+          current = selectedSessionId(ctx, snapshot)
           targets = (snapshot?.items ?? [])
             .map((item) => item?.sessionId)
             .filter((id) => typeof id === 'string' && id !== '')
@@ -173,7 +207,7 @@ window.__ModuleLoader__.load({
 
     function apply(ctx) {
       const installWhenReady = (sub) => {
-        const dispose = install(sub.sessions)
+        const dispose = install(ctx, sub.sessions)
         if (typeof dispose === 'function') ctx.effect(() => dispose, 'current-title-hydration: restore runtime patch')
       }
       const sessions = ctx.get('sessions')

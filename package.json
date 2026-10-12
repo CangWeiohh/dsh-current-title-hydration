@@ -1,7 +1,7 @@
 {
   "name": "dsh-current-title-hydration",
   "version": "0.1.0",
-  "description": "Restores the selected DSH session title after a hard refresh when the cold list cache omits it.",
+  "description": "Restores DSH session titles after a hard refresh when the cold list carries no usable title row.",
   "type": "module",
   "main": "index.js",
   "exports": {
@@ -18,7 +18,7 @@
   ],
   "license": "MIT",
   "scripts": {
-    "check": "node --check index.js && node --check client.js && node --test index.test.js"
+    "check": "node --check index.js && node --check client.js && node --test index.test.js client.test.js"
   },
   "dsh": {
     "bundle": {
